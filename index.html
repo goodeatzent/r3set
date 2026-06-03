@@ -1,0 +1,902 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/>
+<meta name="theme-color" content="#080d16"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<meta name="apple-mobile-web-app-title" content="R3SET"/>
+<meta name="application-name" content="R3SET"/>
+<title>R3SET — Debt Freedom Tracker</title>
+<link rel="manifest" id="manifest-placeholder"/>
+
+<!-- PWA icons injected via JS below -->
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;background:#080d16;color:#dde8f8;font-family:'Outfit',system-ui,sans-serif;overscroll-behavior:none}
+  input[type=range]{accent-color:#00e5b0;width:100%;cursor:pointer}
+  ::-webkit-scrollbar{width:3px}::-webkit-scrollbar-thumb{background:#1a2840;border-radius:99px}
+  button{font-family:inherit;cursor:pointer}
+  input,select,textarea{font-family:inherit}
+  .row-hover:active{background:#0f1624!important}
+  @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap');
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script>
+// ── Generate PWA icons from emoji ──────────────────────────────────────────
+(function(){
+  function makeIcon(size){
+    const c=document.createElement('canvas');c.width=c.height=size;
+    const ctx=c.getContext('2d');
+    // background
+    const r=size*0.22;
+    ctx.beginPath();ctx.moveTo(r,0);ctx.lineTo(size-r,0);ctx.quadraticCurveTo(size,0,size,r);
+    ctx.lineTo(size,size-r);ctx.quadraticCurveTo(size,size,size-r,size);
+    ctx.lineTo(r,size);ctx.quadraticCurveTo(0,size,0,size-r);
+    ctx.lineTo(0,r);ctx.quadraticCurveTo(0,0,r,0);ctx.closePath();
+    const grad=ctx.createLinearGradient(0,0,size,size);
+    grad.addColorStop(0,'#0c2a1e');grad.addColorStop(1,'#0a1628');
+    ctx.fillStyle=grad;ctx.fill();
+    // emoji
+    ctx.font=`${size*0.58}px serif`;ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.fillText('🏦',size/2,size/2+size*0.04);
+    return c.toDataURL('image/png');
+  }
+  const s192=makeIcon(192),s512=makeIcon(512),s180=makeIcon(180);
+  // apple touch icon
+  const link180=document.createElement('link');link180.rel='apple-touch-icon';link180.href=s180;document.head.appendChild(link180);
+  // manifest
+  const manifest={name:'R3SET',short_name:'R3SET',description:'Debt Freedom Tracker',start_url:'.',display:'standalone',background_color:'#080d16',theme_color:'#080d16',orientation:'portrait',icons:[{src:s192,sizes:'192x192',type:'image/png'},{src:s512,sizes:'512x512',type:'image/png',purpose:'any maskable'}]};
+  const blob=new Blob([JSON.stringify(manifest)],{type:'application/manifest+json'});
+  document.getElementById('manifest-placeholder').href=URL.createObjectURL(blob);
+})();
+</script>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+
+<script type="text/babel">
+const{useState,useEffect,useCallback}=React;
+
+// ── COLORS ─────────────────────────────────────────────────────────────────
+const C={
+  bg:"#080d16",surface:"#0f1624",card:"#131d2e",border:"#1a2840",
+  accent:"#00e5b0",accentDim:"#00e5b015",danger:"#ff4d6a",dangerDim:"#ff4d6a15",
+  warn:"#ffb830",warnDim:"#ffb83015",purple:"#a78bfa",blue:"#38bdf8",
+  text:"#dde8f8",muted:"#4e6280",
+};
+
+// ── STORAGE ────────────────────────────────────────────────────────────────
+const KEY="r3set_v1";
+const load=()=>{try{const s=localStorage.getItem(KEY);return s?JSON.parse(s):null}catch{return null}};
+const save=(s)=>{try{localStorage.setItem(KEY,JSON.stringify(s))}catch{}};
+
+// ── DEFAULTS ───────────────────────────────────────────────────────────────
+const DEFAULTS={
+  savedAmount:900,w2Hours:40,freelanceHours:10,w2Rate:15,freelanceRate:40,
+  extraPayment:200,strategy:"avalanche",businessExpenses:150,
+  debts:[
+    {id:1,name:"Closed CC",balance:5000,originalBalance:5000,minPayment:100,apr:24.99,color:"#ff4d6a"},
+    {id:2,name:"Open CC",balance:980,originalBalance:1000,minPayment:25,apr:22.99,color:"#ffb830"},
+  ],
+  accounts:[
+    {id:1,name:"Checking",type:"checking",balance:0,color:"#38bdf8"},
+    {id:2,name:"Savings",type:"savings",balance:900,color:"#00e5b0"},
+  ],
+  expenses:[
+    {id:1,name:"Rent",amount:1000,category:"housing",recurring:true,completed:false},
+    {id:2,name:"Wisdom Teeth",amount:718,category:"medical",recurring:false,completed:false},
+    {id:3,name:"Tires",amount:400,category:"auto",recurring:false,completed:false},
+  ],
+  incomeLog:[],
+};
+
+// ── HELPERS ────────────────────────────────────────────────────────────────
+const fmt=(n)=>new Intl.NumberFormat("en-US",{style:"currency",currency:"USD",maximumFractionDigits:0}).format(n||0);
+const uid=()=>Date.now()+Math.random().toString(36).slice(2);
+const COLORS_CYCLE=["#ff4d6a","#ffb830","#a78bfa","#38bdf8","#00e5b0","#f97316"];
+
+// Fixed payoff calc — returns months as integer, handles edge cases
+function calcMonths(balance, apr, payment){
+  if(!balance||balance<=0) return 0;
+  if(!payment||payment<=0) return 9999;
+  const r=apr/100/12;
+  if(r===0) return Math.ceil(balance/payment);
+  // If payment doesn't cover interest, infinite
+  const interest=balance*r;
+  if(payment<=interest) return 9999;
+  const m=-Math.log(1-(r*balance)/payment)/Math.log(1+r);
+  if(!isFinite(m)||isNaN(m)||m<0) return 9999;
+  return Math.ceil(m);
+}
+
+function moLabel(m){
+  if(m>=9999) return "∞";
+  if(m===0) return "Paid!";
+  if(m<12) return `${m}mo`;
+  const yrs=Math.floor(m/12),mos=m%12;
+  return mos>0?`${yrs}y ${mos}mo`:`${yrs}yr`;
+}
+
+// ── UI COMPONENTS ──────────────────────────────────────────────────────────
+function Bar({value,max,color,h=8}){
+  const pct=Math.min((value/Math.max(max,1))*100,100);
+  return <div style={{background:C.border,borderRadius:99,height:h,overflow:"hidden"}}>
+    <div style={{width:`${pct}%`,height:"100%",background:color,borderRadius:99,transition:"width 0.5s ease"}}/>
+  </div>;
+}
+function Card({children,style={},onClick}){
+  return <div onClick={onClick} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:16,padding:"18px 20px",...style}}>{children}</div>;
+}
+function Pill({label,color}){
+  return <span style={{background:color+"25",color,fontSize:10,fontWeight:700,padding:"2px 7px",borderRadius:99,letterSpacing:0.5,textTransform:"uppercase"}}>{label}</span>;
+}
+function Btn({label,color=C.accent,onClick,small,ghost,full}){
+  return <button onClick={onClick} style={{
+    background:ghost?"transparent":color+"22",color,border:`1px solid ${color}44`,
+    borderRadius:8,padding:small?"5px 10px":"9px 16px",fontSize:small?11:13,fontWeight:600,
+    width:full?"100%":"auto",display:"inline-flex",alignItems:"center",gap:5,
+  }}>{label}</button>;
+}
+function Inp({value,onChange,type="text",placeholder,prefix,min,max,step}){
+  return <div style={{display:"flex",alignItems:"center",background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,overflow:"hidden"}}>
+    {prefix&&<span style={{padding:"0 10px",color:C.muted,fontSize:13}}>{prefix}</span>}
+    <input type={type} value={value} onChange={onChange} placeholder={placeholder} min={min} max={max} step={step}
+      style={{background:"transparent",border:"none",color:C.text,padding:"9px 12px",fontSize:13,outline:"none",width:"100%"}}/>
+  </div>;
+}
+function Modal({open,onClose,title,children}){
+  if(!open) return null;
+  return <div style={{position:"fixed",inset:0,background:"#000000cc",zIndex:1000,display:"flex",alignItems:"flex-end",justifyContent:"center"}} onClick={onClose}>
+    <div onClick={e=>e.stopPropagation()} style={{background:C.card,borderRadius:"20px 20px 0 0",border:`1px solid ${C.border}`,padding:"24px 20px 48px",width:"100%",maxWidth:500,maxHeight:"88vh",overflowY:"auto"}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18}}>
+        <div style={{fontSize:15,fontWeight:700}}>{title}</div>
+        <button onClick={onClose} style={{background:C.surface,border:`1px solid ${C.border}`,color:C.muted,borderRadius:8,padding:"4px 10px",fontSize:16}}>✕</button>
+      </div>
+      {children}
+    </div>
+  </div>;
+}
+
+// ── MAIN APP ───────────────────────────────────────────────────────────────
+function App(){
+  const [tab,setTab]=useState("dashboard");
+  const [st,setStRaw]=useState(()=>load()||DEFAULTS);
+  const [modal,setModal]=useState(null);
+  const [toast,setToast]=useState(null);
+  const [deferredPrompt,setDeferredPrompt]=useState(null);
+  const [showInstall,setShowInstall]=useState(false);
+
+  useEffect(()=>{
+    const handler=(e)=>{e.preventDefault();setDeferredPrompt(e);setShowInstall(true);};
+    window.addEventListener("beforeinstallprompt",handler);
+    return()=>window.removeEventListener("beforeinstallprompt",handler);
+  },[]);
+
+  const setSt=(upd)=>setStRaw(prev=>{
+    const next=typeof upd==="function"?upd(prev):{...prev,...upd};
+    save(next);return next;
+  });
+
+  const toast2=(msg,color=C.accent)=>{
+    setToast({msg,color});setTimeout(()=>setToast(null),2500);
+  };
+
+  const{savedAmount,w2Hours,freelanceHours,w2Rate,freelanceRate,
+    extraPayment,strategy,businessExpenses,debts,accounts,expenses,incomeLog}=st;
+
+  // ── Computed ──
+  const taxRate=0.22;
+  const monthlyGross=(w2Hours*w2Rate+freelanceHours*freelanceRate)*4.33;
+  const monthlyNet=monthlyGross*(1-taxRate);
+  const totalDebt=debts.reduce((s,d)=>s+d.balance,0);
+  const totalMinPay=debts.reduce((s,d)=>s+d.minPayment,0);
+  const recurringExp=expenses.filter(e=>e.recurring&&!e.completed).reduce((s,e)=>s+e.amount,0);
+  const monthlyFixed=recurringExp+businessExpenses+totalMinPay;
+  const discretionary=monthlyNet-monthlyFixed;
+  const totalAssets=accounts.reduce((s,a)=>s+a.balance,0);
+  const netWorth=totalAssets-totalDebt;
+
+  // Debt payoff data (for Debts tab - only extra on #0)
+  const sortedDebts=[...debts].sort((a,b)=>strategy==="avalanche"?b.apr-a.apr:a.balance-b.balance);
+  const debtPayoff=sortedDebts.map((d,i)=>{
+    const pay=d.minPayment+(i===0?extraPayment:0);
+    return{...d,pay,months:calcMonths(d.balance,d.apr,pay)};
+  });
+
+  // Full rollover simulation for Plan tab
+  function buildSequence(){
+    const ordered=[...debts].sort((a,b)=>strategy==="avalanche"?b.apr-a.apr:a.balance-b.balance);
+    let freed=0;
+    let cumMonth=0;
+    return ordered.map((d,i)=>{
+      const pay=d.minPayment+extraPayment+freed;
+      const months=calcMonths(d.balance,d.apr,pay);
+      const interest=Math.max(0,(pay*months)-d.balance);
+      const startMonth=cumMonth;
+      cumMonth+=months;
+      const rollover=i>0?ordered[i-1].name:null;
+      const rolledAmt=i>0?(ordered[i-1].minPayment+extraPayment+freed-d.minPayment):0;
+      freed+=d.minPayment; // after payoff, min payment rolls over
+      return{...d,pay,months,interest,startMonth,endMonth:cumMonth,rollover,rolledAmt};
+    });
+  }
+  const sequence=buildSequence();
+  const totalMonths=sequence[sequence.length-1]?.endMonth||0;
+  const totalInterest=sequence.reduce((s,d)=>s+d.interest,0);
+
+  const upd=(k)=>(v)=>setSt(s=>({...s,[k]:v}));
+
+  // handlers
+  const toggleExp=(id)=>{
+    const e=expenses.find(x=>x.id===id);
+    setSt(s=>({...s,expenses:s.expenses.map(e=>e.id===id?{...e,completed:!e.completed}:e)}));
+    if(e&&!e.completed) toast2(`✅ "${e.name}" done!`);
+  };
+  const saveDebt=(d)=>{
+    setSt(s=>({...s,debts:d.id?s.debts.map(x=>x.id===d.id?d:x):[...s.debts,{...d,id:uid(),color:COLORS_CYCLE[s.debts.length%6]}]}));
+    setModal(null);toast2("Saved");
+  };
+  const delDebt=(id)=>{setSt(s=>({...s,debts:s.debts.filter(d=>d.id!==id)}));setModal(null);toast2("Removed",C.danger);};
+  const saveAcct=(a)=>{
+    setSt(s=>({...s,accounts:a.id?s.accounts.map(x=>x.id===a.id?a:x):[...s.accounts,{...a,id:uid(),color:COLORS_CYCLE[(s.accounts.length+2)%6]}]}));
+    setModal(null);toast2("Saved");
+  };
+  const delAcct=(id)=>{setSt(s=>({...s,accounts:s.accounts.filter(a=>a.id!==id)}));setModal(null);toast2("Removed",C.danger);};
+  const saveExp=(e)=>{
+    setSt(s=>({...s,expenses:e.id?s.expenses.map(x=>x.id===e.id?e:x):[...s.expenses,{...e,id:uid(),completed:false}]}));
+    setModal(null);toast2("Saved");
+  };
+  const delExp=(id)=>{setSt(s=>({...s,expenses:s.expenses.filter(e=>e.id!==id)}));setModal(null);};
+  const logIncome=(entry)=>{
+    setSt(s=>({...s,incomeLog:[{...entry,id:uid(),date:new Date().toLocaleDateString()},...s.incomeLog]}));
+    setModal(null);toast2("Income logged 💵");
+  };
+  const applyPayment=(id,amt)=>{
+    setSt(s=>({...s,debts:s.debts.map(d=>d.id===id?{...d,balance:Math.max(0,d.balance-amt)}:d)}));
+    toast2(`💸 ${fmt(amt)} applied!`);setModal(null);
+  };
+  const resetAll=()=>{save(DEFAULTS);setStRaw(DEFAULTS);toast2("Reset",C.danger);setModal(null);};
+
+  const TABS=[
+    {id:"dashboard",icon:"⌂",label:"Home"},
+    {id:"debts",icon:"◎",label:"Debts"},
+    {id:"accounts",icon:"◈",label:"Accounts"},
+    {id:"income",icon:"◉",label:"Income"},
+    {id:"plan",icon:"◆",label:"Plan"},
+  ];
+
+  return(
+    <div style={{minHeight:"100vh",background:C.bg,color:C.text,paddingBottom:80,maxWidth:500,margin:"0 auto"}}>
+    <style>{`
+      @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap');
+      input[type=range]{-webkit-appearance:none;height:4px;border-radius:99px;background:#1a2840;outline:none}
+      input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;height:18px;border-radius:50%;background:#00e5b0;cursor:pointer}
+    `}</style>
+
+    {/* Toast */}
+    {toast&&<div style={{position:"fixed",top:16,left:"50%",transform:"translateX(-50%)",background:toast.color,color:"#000",padding:"10px 20px",borderRadius:99,fontSize:13,fontWeight:700,zIndex:2000,whiteSpace:"nowrap",boxShadow:"0 4px 20px #0008"}}>{toast.msg}</div>}
+
+    {/* Install banner */}
+    {showInstall&&<div style={{background:C.accentDim,borderBottom:`1px solid ${C.accent}44`,padding:"10px 16px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+      <span style={{fontSize:12,color:C.accent}}>📲 Add R3SET to your home screen</span>
+      <div style={{display:"flex",gap:8}}>
+        <Btn small label="Install" color={C.accent} onClick={async()=>{if(deferredPrompt){deferredPrompt.prompt();const r=await deferredPrompt.userChoice;if(r.outcome==="accepted")setShowInstall(false);}}}/>
+        <Btn small ghost label="✕" color={C.muted} onClick={()=>setShowInstall(false)}/>
+      </div>
+    </div>}
+
+    {/* Header */}
+    <div style={{background:"linear-gradient(180deg,#0c1828 0%,#080d16 100%)",padding:"20px 20px 0",borderBottom:`1px solid ${C.border}`}}>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16}}>
+        <div style={{width:38,height:38,background:"linear-gradient(135deg,#00e5b0,#009e7a)",borderRadius:11,display:"grid",placeItems:"center",fontSize:20}}>🏦</div>
+        <div>
+          <div style={{fontSize:20,fontWeight:800,letterSpacing:-1,color:C.text}}>R3SET</div>
+          <div style={{fontSize:9,color:C.muted,letterSpacing:1.5}}>DEBT FREEDOM TRACKER</div>
+        </div>
+        <div style={{marginLeft:"auto",textAlign:"right"}}>
+          <div style={{fontSize:9,color:C.muted,letterSpacing:0.5}}>NET WORTH</div>
+          <div style={{fontSize:18,fontWeight:800,color:netWorth>=0?C.accent:C.danger,fontFamily:"'JetBrains Mono',monospace"}}>{fmt(netWorth)}</div>
+        </div>
+      </div>
+      <div style={{display:"flex"}}>
+        {TABS.map(t=>(
+          <button key={t.id} onClick={()=>setTab(t.id)} style={{
+            flex:1,background:"none",border:"none",borderBottom:`2px solid ${tab===t.id?C.accent:"transparent"}`,
+            color:tab===t.id?C.accent:C.muted,padding:"8px 4px 10px",
+            fontSize:10,fontWeight:700,letterSpacing:0.3,display:"flex",flexDirection:"column",alignItems:"center",gap:2,
+          }}>
+            <span style={{fontSize:13}}>{t.icon}</span>{t.label}
+          </button>
+        ))}
+      </div>
+    </div>
+
+    <div style={{padding:"14px 14px 0"}}>
+
+    {/* ══ DASHBOARD ══ */}
+    {tab==="dashboard"&&(
+      <div style={{display:"flex",flexDirection:"column",gap:12}}>
+        {/* KPI row */}
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:9}}>
+          {[{label:"Monthly Net",val:fmt(monthlyNet),color:C.accent},{label:"Total Debt",val:fmt(totalDebt),color:C.danger},{label:"Discretionary",val:fmt(discretionary),color:discretionary>0?C.accent:C.danger}].map(i=>(
+            <Card key={i.label} style={{padding:"11px 8px",textAlign:"center"}}>
+              <div style={{fontFamily:"'JetBrains Mono',monospace",fontSize:13,fontWeight:700,color:i.color}}>{i.val}</div>
+              <div style={{fontSize:9,color:C.muted,marginTop:3,textTransform:"uppercase",letterSpacing:0.4}}>{i.label}</div>
+            </Card>
+          ))}
+        </div>
+
+        {/* Savings */}
+        <Card>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+            <div style={{fontSize:13,fontWeight:600}}>💵 Savings on Hand</div>
+            <div style={{fontFamily:"'JetBrains Mono',monospace",fontSize:22,fontWeight:800,color:C.accent}}>{fmt(savedAmount)}</div>
+          </div>
+          <input type="range" min={0} max={10000} step={50} value={savedAmount} onChange={e=>upd("savedAmount")(+e.target.value)} style={{width:"100%"}}/>
+          <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:C.muted,marginTop:5}}>
+            <span>$0</span><span>Slide to update →</span><span>$10k</span>
+          </div>
+          {savedAmount>0&&<div style={{marginTop:10,background:C.accentDim,borderRadius:8,padding:"8px 12px",fontSize:12,color:C.accent}}>
+            💡 Apply {fmt(savedAmount)} to priority debt → saves {fmt(savedAmount*(sequence[0]?.apr||24)/100/12)} in monthly interest
+          </div>}
+        </Card>
+
+        {/* One-time payments */}
+        <Card>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+            <div style={{fontSize:13,fontWeight:600}}>⚡ One-Time Payments</div>
+            <Btn small label="+ Add" color={C.accent} onClick={()=>setModal({type:"expense",data:{recurring:false}})}/>
+          </div>
+          {expenses.filter(e=>!e.recurring).map(e=>(
+            <div key={e.id} className="row-hover" style={{display:"flex",alignItems:"center",gap:10,padding:"10px 8px",borderRadius:10,cursor:"pointer",borderBottom:`1px solid ${C.border}`,transition:"background 0.15s"}}>
+              <div onClick={ev=>{ev.stopPropagation();toggleExp(e.id);}}
+                style={{width:22,height:22,borderRadius:6,border:`2px solid ${e.completed?C.accent:C.border}`,background:e.completed?C.accent:"transparent",display:"grid",placeItems:"center",flexShrink:0,transition:"all 0.2s"}}>
+                {e.completed&&<span style={{fontSize:12,color:"#000"}}>✓</span>}
+              </div>
+              <div style={{flex:1}} onClick={()=>setModal({type:"expense",data:e})}>
+                <div style={{fontSize:13,textDecoration:e.completed?"line-through":"none",color:e.completed?C.muted:C.text}}>{e.name}</div>
+                <Pill label={e.category} color={C.warn}/>
+              </div>
+              <div style={{fontFamily:"'JetBrains Mono',monospace",fontSize:14,fontWeight:700,color:e.completed?C.muted:C.warn,textDecoration:e.completed?"line-through":"none"}}>{fmt(e.amount)}</div>
+            </div>
+          ))}
+          {expenses.filter(e=>!e.recurring).length===0&&<div style={{fontSize:12,color:C.muted,textAlign:"center",padding:"12px 0"}}>No one-time expenses</div>}
+          <div style={{display:"flex",justifyContent:"space-between",marginTop:10,paddingTop:8,borderTop:`1px solid ${C.border}`}}>
+            <span style={{fontSize:12,color:C.muted}}>Remaining</span>
+            <span style={{fontFamily:"'JetBrains Mono',monospace",fontWeight:700,color:C.warn}}>{fmt(expenses.filter(e=>!e.recurring&&!e.completed).reduce((s,e)=>s+e.amount,0))}</span>
+          </div>
+        </Card>
+
+        {/* Recurring bills */}
+        <Card>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+            <div style={{fontSize:13,fontWeight:600}}>🔁 Monthly Bills</div>
+            <Btn small label="+ Add" color={C.blue} onClick={()=>setModal({type:"expense",data:{recurring:true}})}/>
+          </div>
+          {expenses.filter(e=>e.recurring).map(e=>(
+            <div key={e.id} className="row-hover" onClick={()=>setModal({type:"expense",data:e})}
+              style={{display:"flex",alignItems:"center",gap:10,padding:"9px 8px",borderRadius:10,cursor:"pointer",borderBottom:`1px solid ${C.border}`}}>
+              <div style={{width:7,height:7,borderRadius:99,background:C.blue,flexShrink:0}}/>
+              <span style={{flex:1,fontSize:13}}>{e.name}</span>
+              <Pill label={e.category} color={C.blue}/>
+              <span style={{fontFamily:"'JetBrains Mono',monospace",fontSize:13,fontWeight:700,color:C.blue}}>{fmt(e.amount)}</span>
+            </div>
+          ))}
+          <div style={{display:"flex",justifyContent:"space-between",marginTop:10,paddingTop:8,borderTop:`1px solid ${C.border}`}}>
+            <span style={{fontSize:12,color:C.muted}}>Total/month</span>
+            <span style={{fontFamily:"'JetBrains Mono',monospace",fontWeight:700,color:C.blue}}>{fmt(recurringExp)}</span>
+          </div>
+        </Card>
+
+        <div style={{textAlign:"center",paddingBottom:8}}>
+          <Btn small ghost label="⚙ Reset All Data" color={C.muted} onClick={()=>setModal({type:"confirm_reset"})}/>
+        </div>
+      </div>
+    )}
+
+    {/* ══ DEBTS ══ */}
+    {tab==="debts"&&(
+      <div style={{display:"flex",flexDirection:"column",gap:12}}>
+        {/* Strategy picker */}
+        <Card>
+          <div style={{fontSize:11,fontWeight:700,color:C.muted,marginBottom:10,letterSpacing:0.8,textTransform:"uppercase"}}>Payoff Strategy</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+            {[{id:"avalanche",label:"⚡ Avalanche",desc:"Highest APR first — saves most money"},{id:"snowball",label:"❄️ Snowball",desc:"Smallest balance first — best momentum"}].map(s=>(
+              <button key={s.id} onClick={()=>upd("strategy")(s.id)} style={{background:strategy===s.id?C.accentDim:C.surface,border:`1.5px solid ${strategy===s.id?C.accent:C.border}`,borderRadius:10,padding:"10px",textAlign:"left"}}>
+                <div style={{color:strategy===s.id?C.accent:C.text,fontSize:13,fontWeight:600}}>{s.label}</div>
+                <div style={{color:C.muted,fontSize:11,marginTop:2}}>{s.desc}</div>
+              </button>
+            ))}
+          </div>
+        </Card>
+
+        {/* Extra payment slider */}
+        <Card>
+          <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}>
+            <div style={{fontSize:13,fontWeight:600}}>Extra Monthly Payment</div>
+            <div style={{fontFamily:"'JetBrains Mono',monospace",color:C.accent,fontWeight:700}}>{fmt(extraPayment)}</div>
+          </div>
+          <input type="range" min={0} max={1000} step={25} value={extraPayment} onChange={e=>upd("extraPayment")(+e.target.value)} style={{width:"100%"}}/>
+          <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:C.muted,marginTop:5}}>
+            <span>$0</span><span>$1,000/mo extra</span>
+          </div>
+        </Card>
+
+        {/* Debt cards */}
+        {debtPayoff.map((d,i)=>(
+          <Card key={d.id} style={{borderColor:i===0?d.color+"55":C.border}}>
+            {i===0&&<div style={{position:"absolute",top:0,left:0,right:0,height:2,background:`linear-gradient(90deg,${d.color},transparent)`,borderRadius:"16px 16px 0 0"}}/>}
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
+              <div>
+                <div style={{fontSize:14,fontWeight:700}}>{d.name}</div>
+                <div style={{marginTop:4,display:"flex",gap:5,flexWrap:"wrap"}}>
+                  <Pill label={i===0?"ATTACK NOW":"MIN ONLY"} color={i===0?C.accent:C.muted}/>
+                  <Pill label={`${d.apr}% APR`} color={d.color}/>
+                </div>
+              </div>
+              <div style={{textAlign:"right"}}>
+                <div style={{fontFamily:"'JetBrains Mono',monospace",fontSize:20,fontWeight:800,color:d.color}}>{fmt(d.balance)}</div>
+              </div>
+            </div>
+            <Bar value={d.balance} max={d.originalBalance||d.balance} color={d.color} h={5}/>
+            <div style={{display:"flex",justifyContent:"space-between",marginTop:4,marginBottom:12}}>
+              <span style={{fontSize:11,color:C.muted}}>Original: {fmt(d.originalBalance)}</span>
+              <span style={{fontSize:11,color:d.color}}>{Math.round((1-d.balance/(d.originalBalance||d.balance))*100)}% paid</span>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
+              {[{label:"Pay/mo",val:fmt(d.pay)},{label:"Payoff",val:moLabel(d.months)},{label:"Min",val:fmt(d.minPayment)}].map(r=>(
+                <div key={r.label} style={{background:C.surface,borderRadius:8,padding:"8px",textAlign:"center"}}>
+                  <div style={{fontSize:10,color:C.muted}}>{r.label}</div>
+                  <div style={{fontFamily:"'JetBrains Mono',monospace",fontWeight:700,fontSize:13,marginTop:2,color:r.label==="Payoff"?(d.months<12?C.accent:d.months<24?C.warn:C.text):C.text}}>{r.val}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{display:"flex",gap:8,marginTop:12}}>
+              <Btn small label="✏ Edit" color={C.blue} onClick={()=>setModal({type:"debt",data:d})}/>
+              <Btn small label="💸 Pay" color={C.accent} onClick={()=>setModal({type:"payment",data:d})}/>
+            </div>
+          </Card>
+        ))}
+        <Btn full label="+ Add Debt" color={C.purple} onClick={()=>setModal({type:"debt",data:{}})}/>
+      </div>
+    )}
+
+    {/* ══ ACCOUNTS ══ */}
+    {tab==="accounts"&&(
+      <div style={{display:"flex",flexDirection:"column",gap:12}}>
+        <Card style={{background:"linear-gradient(135deg,#0d1f30,#0a1628)"}}>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,textAlign:"center"}}>
+            {[{label:"Assets",val:fmt(totalAssets),color:C.accent},{label:"Debt",val:fmt(totalDebt),color:C.danger},{label:"Net Worth",val:fmt(netWorth),color:netWorth>=0?C.accent:C.danger}].map(i=>(
+              <div key={i.label}>
+                <div style={{fontFamily:"'JetBrains Mono',monospace",fontSize:15,fontWeight:800,color:i.color}}>{i.val}</div>
+                <div style={{fontSize:10,color:C.muted,marginTop:2}}>{i.label}</div>
+              </div>
+            ))}
+          </div>
+        </Card>
+
+        <Card>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+            <div style={{fontSize:13,fontWeight:600}}>🏦 Accounts</div>
+            <Btn small label="+ Add" color={C.blue} onClick={()=>setModal({type:"account",data:{}})}/>
+          </div>
+          {accounts.map(a=>(
+            <div key={a.id} className="row-hover" onClick={()=>setModal({type:"account",data:a})}
+              style={{display:"flex",alignItems:"center",gap:12,padding:"12px 8px",borderRadius:10,cursor:"pointer",borderBottom:`1px solid ${C.border}`}}>
+              <div style={{width:36,height:36,borderRadius:10,background:a.color+"22",display:"grid",placeItems:"center",fontSize:16}}>
+                {a.type==="checking"?"🏧":a.type==="savings"?"💎":a.type==="investment"?"📈":"💳"}
+              </div>
+              <div style={{flex:1}}>
+                <div style={{fontSize:13,fontWeight:600}}>{a.name}</div>
+                <Pill label={a.type} color={a.color}/>
+              </div>
+              <div style={{fontFamily:"'JetBrains Mono',monospace",fontSize:16,fontWeight:800,color:a.balance>=0?a.color:C.danger}}>{fmt(a.balance)}</div>
+            </div>
+          ))}
+          {accounts.length===0&&<div style={{fontSize:12,color:C.muted,textAlign:"center",padding:16}}>No accounts yet</div>}
+        </Card>
+
+        {accounts.length>0&&<Card>
+          <div style={{fontSize:13,fontWeight:600,marginBottom:12}}>Asset Breakdown</div>
+          {accounts.map(a=>(
+            <div key={a.id} style={{marginBottom:10}}>
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+                <span style={{fontSize:12,color:C.muted}}>{a.name}</span>
+                <span style={{fontFamily:"'JetBrains Mono',monospace",fontSize:12,color:a.color}}>{fmt(a.balance)}</span>
+              </div>
+              <Bar value={Math.max(a.balance,0)} max={Math.max(totalAssets,1)} color={a.color}/>
+            </div>
+          ))}
+        </Card>}
+
+        <Card>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+            <div style={{fontSize:13,fontWeight:600}}>📥 Income Log</div>
+            <Btn small label="+ Log" color={C.accent} onClick={()=>setModal({type:"income_log"})}/>
+          </div>
+          {incomeLog.slice(0,10).map(e=>(
+            <div key={e.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:`1px solid ${C.border}`}}>
+              <div>
+                <div style={{fontSize:12,fontWeight:600}}>{e.source}</div>
+                <div style={{fontSize:10,color:C.muted}}>{e.date}</div>
+              </div>
+              <span style={{fontFamily:"'JetBrains Mono',monospace",fontWeight:700,color:C.accent}}>{fmt(e.amount)}</span>
+            </div>
+          ))}
+          {incomeLog.length===0&&<div style={{fontSize:12,color:C.muted,textAlign:"center",padding:12}}>Log paychecks & freelance income here</div>}
+          {incomeLog.length>0&&<div style={{display:"flex",justifyContent:"space-between",marginTop:10,paddingTop:8,borderTop:`1px solid ${C.border}`}}>
+            <span style={{fontSize:12,color:C.muted}}>Total logged</span>
+            <span style={{fontFamily:"'JetBrains Mono',monospace",fontWeight:700,color:C.accent}}>{fmt(incomeLog.reduce((s,e)=>s+e.amount,0))}</span>
+          </div>}
+        </Card>
+      </div>
+    )}
+
+    {/* ══ INCOME ══ */}
+    {tab==="income"&&(
+      <div style={{display:"flex",flexDirection:"column",gap:12}}>
+        <Card>
+          <div style={{fontSize:13,fontWeight:600,marginBottom:12}}>⏱ 9-5 Job</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:12}}>
+            <div><div style={{fontSize:11,color:C.muted,marginBottom:5}}>Hourly Rate</div><Inp type="number" value={w2Rate} onChange={e=>upd("w2Rate")(+e.target.value)} prefix="$"/></div>
+            <div><div style={{fontSize:11,color:C.muted,marginBottom:5}}>Hours/Week</div><Inp type="number" value={w2Hours} onChange={e=>upd("w2Hours")(+e.target.value)}/></div>
+          </div>
+          <input type="range" min={0} max={60} step={1} value={w2Hours} onChange={e=>upd("w2Hours")(+e.target.value)} style={{width:"100%"}}/>
+          <div style={{textAlign:"right",marginTop:8,fontFamily:"'JetBrains Mono',monospace",color:C.blue,fontWeight:700}}>{fmt(w2Hours*w2Rate*4.33)}/mo</div>
+        </Card>
+
+        <Card>
+          <div style={{fontSize:13,fontWeight:600,marginBottom:12}}>🚀 Freelance</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:12}}>
+            <div><div style={{fontSize:11,color:C.muted,marginBottom:5}}>Hourly Rate</div><Inp type="number" value={freelanceRate} onChange={e=>upd("freelanceRate")(+e.target.value)} prefix="$"/></div>
+            <div><div style={{fontSize:11,color:C.muted,marginBottom:5}}>Hours/Week</div><Inp type="number" value={freelanceHours} onChange={e=>upd("freelanceHours")(+e.target.value)}/></div>
+          </div>
+          <input type="range" min={0} max={40} step={1} value={freelanceHours} onChange={e=>upd("freelanceHours")(+e.target.value)} style={{width:"100%"}}/>
+          <div style={{marginTop:10,background:C.accentDim,borderRadius:8,padding:"8px 12px",fontSize:12,color:C.accent}}>
+            💡 +1hr/week = {fmt(freelanceRate*4.33*0.75)}/mo extra after taxes
+          </div>
+        </Card>
+
+        <Card>
+          <div style={{fontSize:13,fontWeight:600,marginBottom:10}}>📋 Business Expenses/Mo</div>
+          <Inp type="number" value={businessExpenses} onChange={e=>upd("businessExpenses")(+e.target.value)} prefix="$"/>
+          <div style={{fontSize:11,color:C.muted,marginTop:6}}>Reduces your taxable freelance income</div>
+        </Card>
+
+        <Card>
+          <div style={{fontSize:13,fontWeight:600,marginBottom:12}}>📊 Monthly Breakdown</div>
+          {[
+            {label:"W2 Gross",val:w2Hours*w2Rate*4.33,c:C.blue},
+            {label:"Freelance Gross",val:freelanceHours*freelanceRate*4.33,c:C.accent},
+            {label:"Total Gross",val:monthlyGross,c:C.text},
+            {label:"Est. Taxes (22%)",val:-(monthlyGross*taxRate),c:C.danger},
+            {label:"Net Take-Home",val:monthlyNet,c:C.accent},
+            {label:"Fixed Costs",val:-monthlyFixed,c:C.warn},
+            {label:"Discretionary",val:discretionary,c:discretionary>0?C.accent:C.danger},
+          ].map(r=>(
+            <div key={r.label} style={{display:"flex",justifyContent:"space-between",padding:"7px 0",borderBottom:`1px solid ${C.border}`}}>
+              <span style={{fontSize:12,color:C.muted}}>{r.label}</span>
+              <span style={{fontFamily:"'JetBrains Mono',monospace",fontWeight:700,fontSize:13,color:r.c}}>{fmt(r.val)}</span>
+            </div>
+          ))}
+        </Card>
+
+        <Card style={{borderColor:(discretionary>0?C.accent:C.danger)+"44"}}>
+          {discretionary>0
+            ?<><div style={{fontSize:13,fontWeight:700,color:C.accent}}>✅ {fmt(discretionary)} available/month</div><div style={{fontSize:12,color:C.muted,marginTop:5}}>After {fmt(extraPayment)} debt attack → {fmt(discretionary-extraPayment)} left for living.</div></>
+            :<><div style={{fontSize:13,fontWeight:700,color:C.danger}}>⚠️ Gap: {fmt(Math.abs(discretionary))}/mo</div><div style={{fontSize:12,color:C.muted,marginTop:5}}>Need ~{Math.ceil(Math.abs(discretionary)/(freelanceRate*4.33*0.75))} more freelance hrs/week to break even.</div></>
+          }
+        </Card>
+      </div>
+    )}
+
+    {/* ══ PLAN ══ */}
+    {tab==="plan"&&(()=>{
+      const isAva=strategy==="avalanche";
+      const stratColor=isAva?C.warn:C.blue;
+      return(
+      <div style={{display:"flex",flexDirection:"column",gap:12}}>
+        {/* Hero */}
+        <Card style={{background:"linear-gradient(135deg,#0b2218,#091520)",borderColor:C.accent+"44",padding:20}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+            <div>
+              <div style={{fontSize:16,fontWeight:800,color:C.accent}}>🎯 Recovery Roadmap</div>
+              <div style={{fontSize:11,color:C.muted,marginTop:3}}>Updates live as you pay down debt</div>
+            </div>
+            <div style={{background:stratColor+"20",border:`1px solid ${stratColor}44`,borderRadius:8,padding:"5px 10px",textAlign:"center"}}>
+              <div style={{fontSize:11,fontWeight:700,color:stratColor}}>{isAva?"⚡ Avalanche":"❄️ Snowball"}</div>
+              <div style={{fontSize:9,color:C.muted}}>active</div>
+            </div>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginTop:16}}>
+            {[
+              {label:"Debt-Free",val:totalMonths>=9999?"∞":moLabel(totalMonths),color:C.accent},
+              {label:"Total Debt",val:fmt(totalDebt),color:C.danger},
+              {label:"Est. Interest",val:fmt(totalInterest),color:C.warn},
+            ].map(s=>(
+              <div key={s.label} style={{background:"#ffffff08",borderRadius:10,padding:"10px 8px",textAlign:"center"}}>
+                <div style={{fontFamily:"'JetBrains Mono',monospace",fontSize:13,fontWeight:800,color:s.color}}>{s.val}</div>
+                <div style={{fontSize:9,color:C.muted,marginTop:2,textTransform:"uppercase",letterSpacing:0.4}}>{s.label}</div>
+              </div>
+            ))}
+          </div>
+        </Card>
+
+        {/* Strategy card */}
+        <Card style={{borderColor:stratColor+"44"}}>
+          <div style={{display:"flex",gap:10}}>
+            <div style={{fontSize:22}}>{isAva?"⚡":"❄️"}</div>
+            <div>
+              <div style={{fontSize:13,fontWeight:700,color:stratColor}}>{isAva?"Avalanche — Highest APR First":"Snowball — Smallest Balance First"}</div>
+              <div style={{fontSize:12,color:C.muted,marginTop:4,lineHeight:1.6}}>
+                {isAva
+                  ?`Targeting ${sequence[0]?.name} (${sequence[0]?.apr}% APR) first. You'll save ${fmt(totalInterest)} in interest vs. minimums only.`
+                  :`Targeting ${sequence[0]?.name} (${fmt(sequence[0]?.balance)} balance) first. First debt gone in ~${moLabel(sequence[0]?.months)}, then that payment snowballs into the next.`
+                }
+              </div>
+            </div>
+          </div>
+        </Card>
+
+        {/* Immediate actions */}
+        <Card style={{borderColor:C.danger+"44"}}>
+          <div style={{display:"flex",gap:12}}>
+            <div style={{background:C.danger+"20",color:C.danger,fontFamily:"'JetBrains Mono',monospace",fontWeight:800,fontSize:14,padding:"5px 9px",borderRadius:8,flexShrink:0,alignSelf:"flex-start"}}>NOW</div>
+            <div>
+              <div style={{fontSize:14,fontWeight:700,color:C.danger,marginBottom:10}}>This Week — Triage</div>
+              {[
+                savedAmount>0&&`💵 Apply ${fmt(savedAmount)} savings to ${sequence[0]?.name} → reduces balance & interest immediately`,
+                expenses.filter(e=>!e.recurring&&!e.completed).length>0&&`⚡ ${expenses.filter(e=>!e.recurring&&!e.completed).length} one-time payment(s) pending — check off in Dashboard as you pay them`,
+                "📞 Call about wisdom teeth — ask about payment plans",
+                "🔧 Shop 3 tire quotes before committing",
+                "🔄 Set autopay for ALL minimums — never miss a payment",
+              ].filter(Boolean).map((item,i)=>(
+                <div key={i} style={{display:"flex",gap:8,marginBottom:8}}>
+                  <span style={{color:C.danger,flexShrink:0}}>→</span>
+                  <span style={{fontSize:12,color:C.muted,lineHeight:1.6}}>{item}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </Card>
+
+        {/* Dynamic sequence */}
+        <div style={{fontSize:11,color:C.muted,fontWeight:700,letterSpacing:0.8,textTransform:"uppercase",paddingLeft:4,marginBottom:2}}>
+          {isAva?"⚡ Avalanche Attack Order":"❄️ Snowball Attack Order"}
+        </div>
+
+        {sequence.map((d,i)=>{
+          const isFirst=i===0;
+          return(
+            <Card key={d.id} style={{borderColor:isFirst?d.color+"66":C.border,position:"relative",overflow:"hidden"}}>
+              {isFirst&&<div style={{position:"absolute",top:0,left:0,right:0,height:2,background:`linear-gradient(90deg,${d.color},transparent)`}}/>}
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
+                <div style={{display:"flex",gap:10,alignItems:"center"}}>
+                  <div style={{background:d.color+"20",color:d.color,fontFamily:"'JetBrains Mono',monospace",fontWeight:800,fontSize:15,padding:"5px 9px",borderRadius:8,flexShrink:0}}>#{i+1}</div>
+                  <div>
+                    <div style={{fontSize:14,fontWeight:700}}>{d.name}</div>
+                    <div style={{display:"flex",gap:5,marginTop:3,flexWrap:"wrap"}}>
+                      <Pill label={isFirst?"START HERE":(`Start mo.${d.startMonth}`)} color={isFirst?C.accent:C.muted}/>
+                      <Pill label={isAva?`${d.apr}% APR`:`${fmt(d.balance)} bal`} color={d.color}/>
+                    </div>
+                  </div>
+                </div>
+                <div style={{textAlign:"right"}}>
+                  <div style={{fontFamily:"'JetBrains Mono',monospace",fontSize:18,fontWeight:800,color:d.color}}>{fmt(d.balance)}</div>
+                  <div style={{fontSize:10,color:C.muted}}>remaining</div>
+                </div>
+              </div>
+
+              <Bar value={d.balance} max={d.originalBalance||d.balance} color={d.color} h={5}/>
+              <div style={{fontSize:11,color:C.muted,marginTop:3,marginBottom:12}}>{Math.round((1-d.balance/(d.originalBalance||d.balance))*100)}% paid off</div>
+
+              {/* Action steps */}
+              <div style={{background:C.surface,borderRadius:10,padding:"12px",marginBottom:10}}>
+                <div style={{fontSize:10,fontWeight:700,color:C.muted,letterSpacing:0.6,textTransform:"uppercase",marginBottom:8}}>Action Steps</div>
+                {[
+                  d.rollover?`🔄 Roll ${fmt(sequence[i-1]?.pay||0)} freed from ${d.rollover} → now paying ${fmt(d.pay)}/mo total`:`💸 Pay ${fmt(d.pay)}/mo (${fmt(d.minPayment)} min + ${fmt(extraPayment)} extra)`,
+                  `📅 Payoff in ~${moLabel(d.months)} (month ${d.startMonth}–${d.endMonth} of your plan)`,
+                  `💰 Estimated interest at this pace: ${fmt(d.interest)}`,
+                  isFirst&&isAva&&d.apr>20?`🚨 ${d.apr}% APR = ${fmt(d.balance*d.apr/100/12)}/mo in interest — hit this hard and fast`:null,
+                  isFirst&&!isAva?`🏆 Fastest win — clearing this frees ${fmt(d.pay)}/mo to snowball into next debt`:null,
+                ].filter(Boolean).map((step,si)=>(
+                  <div key={si} style={{display:"flex",gap:8,marginBottom:6}}>
+                    <span style={{color:d.color,flexShrink:0}}>→</span>
+                    <span style={{fontSize:12,color:C.muted,lineHeight:1.5}}>{step}</span>
+                  </div>
+                ))}
+              </div>
+
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6}}>
+                {[{label:"Pay/mo",val:fmt(d.pay)},{label:"Payoff",val:moLabel(d.months)},{label:"Interest",val:fmt(d.interest)}].map(r=>(
+                  <div key={r.label} style={{background:"#ffffff06",borderRadius:8,padding:"7px",textAlign:"center"}}>
+                    <div style={{fontSize:10,color:C.muted}}>{r.label}</div>
+                    <div style={{fontFamily:"'JetBrains Mono',monospace",fontWeight:700,fontSize:12,color:d.color,marginTop:2}}>{r.val}</div>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          );
+        })}
+
+        {/* Freedom milestone */}
+        {totalMonths<9999&&<Card style={{background:"linear-gradient(135deg,#0d2e1a,#0a1628)",borderColor:C.accent+"55",textAlign:"center",padding:"24px 20px"}}>
+          <div style={{fontSize:28,marginBottom:8}}>🏁</div>
+          <div style={{fontSize:15,fontWeight:800,color:C.accent}}>Debt-Free in ~{moLabel(totalMonths)}</div>
+          <div style={{fontSize:12,color:C.muted,marginTop:6}}>
+            Around <strong style={{color:C.text}}>{new Date(Date.now()+totalMonths*30.5*24*60*60*1000).toLocaleDateString("en-US",{month:"long",year:"numeric"})}</strong>
+          </div>
+          <div style={{marginTop:14,background:C.accentDim,borderRadius:8,padding:"10px",fontSize:12,color:C.accent}}>
+            💡 Switch strategy in Debts tab and return here to compare timelines
+          </div>
+        </Card>}
+
+        {/* After freedom */}
+        <Card>
+          <div style={{display:"flex",gap:12}}>
+            <div style={{background:C.purple+"20",color:C.purple,fontFamily:"'JetBrains Mono',monospace",fontWeight:800,fontSize:13,padding:"5px 9px",borderRadius:8,flexShrink:0,alignSelf:"flex-start"}}>AFTER</div>
+            <div>
+              <div style={{fontSize:14,fontWeight:700,color:C.purple,marginBottom:10}}>Month {totalMonths<9999?totalMonths+1:"?"}+ — Build Wealth</div>
+              {[
+                `Redirect ${fmt(totalMinPay+extraPayment)}/mo (old debt payments) into a HYSA`,
+                "3-month emergency fund target: "+fmt((recurringExp+businessExpenses)*3),
+                "Set aside 25–30% of every freelance check for self-employment taxes",
+                "Emergency fund complete → open a Roth IRA, invest in index funds",
+                "Keep freelance as a separate business — track income/expenses for taxes",
+              ].map((item,i)=>(
+                <div key={i} style={{display:"flex",gap:8,marginBottom:8}}>
+                  <span style={{color:C.purple,flexShrink:0}}>→</span>
+                  <span style={{fontSize:12,color:C.muted,lineHeight:1.6}}>{item}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </Card>
+
+        {/* Budget rules with real $ */}
+        <Card>
+          <div style={{fontSize:13,fontWeight:600,marginBottom:10}}>📐 Your Budget Targets</div>
+          {[["50%",fmt(monthlyNet*0.5),"Needs — rent, bills, food, minimums"],["30%",fmt(monthlyNet*0.3),"Debt attack — above minimums"],["10%",fmt(monthlyNet*0.1),"Emergency buffer"],["10%",fmt(monthlyNet*0.1),"Living — burnout is real"]].map(([p,amt,l])=>(
+            <div key={p} style={{display:"flex",gap:10,padding:"8px 0",borderBottom:`1px solid ${C.border}`,alignItems:"center"}}>
+              <span style={{fontFamily:"'JetBrains Mono',monospace",fontWeight:700,color:C.accent,width:38,flexShrink:0,fontSize:12}}>{p}</span>
+              <span style={{fontFamily:"'JetBrains Mono',monospace",color:C.text,fontWeight:600,fontSize:12,width:60,flexShrink:0}}>{amt}</span>
+              <span style={{fontSize:11,color:C.muted,lineHeight:1.4}}>{l}</span>
+            </div>
+          ))}
+        </Card>
+      </div>
+      );
+    })()}
+
+    </div>{/* end padding wrapper */}
+
+    {/* ══ MODALS ══ */}
+    <DebtModal open={modal?.type==="debt"} data={modal?.data||{}} onSave={saveDebt} onDel={delDebt} onClose={()=>setModal(null)}/>
+    <PayModal open={modal?.type==="payment"} data={modal?.data||{}} onPay={applyPayment} onClose={()=>setModal(null)}/>
+    <AcctModal open={modal?.type==="account"} data={modal?.data||{}} onSave={saveAcct} onDel={delAcct} onClose={()=>setModal(null)}/>
+    <ExpModal open={modal?.type==="expense"} data={modal?.data||{}} onSave={saveExp} onDel={delExp} onClose={()=>setModal(null)}/>
+    <IncomeModal open={modal?.type==="income_log"} onLog={logIncome} onClose={()=>setModal(null)}/>
+    <Modal open={modal?.type==="confirm_reset"} onClose={()=>setModal(null)} title="Reset All Data?">
+      <div style={{fontSize:13,color:C.muted,marginBottom:20}}>This erases everything and resets to defaults. Cannot be undone.</div>
+      <div style={{display:"flex",gap:10}}>
+        <Btn full label="Cancel" color={C.muted} ghost onClick={()=>setModal(null)}/>
+        <Btn full label="Reset Everything" color={C.danger} onClick={resetAll}/>
+      </div>
+    </Modal>
+    </div>
+  );
+}
+
+// ── MODAL COMPONENTS ───────────────────────────────────────────────────────
+function DebtModal({open,data,onSave,onDel,onClose}){
+  const[f,setF]=useState({name:"",balance:"",originalBalance:"",minPayment:"",apr:"",...data});
+  useEffect(()=>setF({name:"",balance:"",originalBalance:"",minPayment:"",apr:"",...data}),[data,open]);
+  const s=(k,v)=>setF(p=>({...p,[k]:v}));
+  const selStyle={width:"100%",background:C.surface,border:`1px solid ${C.border}`,color:C.text,padding:"9px 12px",borderRadius:8,fontSize:13};
+  return<Modal open={open} onClose={onClose} title={data?.id?"Edit Debt":"Add Debt"}>
+    <div style={{display:"flex",flexDirection:"column",gap:12}}>
+      <div><div style={{fontSize:11,color:C.muted,marginBottom:5}}>Debt Name</div><Inp value={f.name} onChange={e=>s("name",e.target.value)} placeholder="e.g. Chase Visa"/></div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+        <div><div style={{fontSize:11,color:C.muted,marginBottom:5}}>Current Balance</div><Inp type="number" value={f.balance} onChange={e=>s("balance",e.target.value)} prefix="$"/></div>
+        <div><div style={{fontSize:11,color:C.muted,marginBottom:5}}>Original Balance</div><Inp type="number" value={f.originalBalance} onChange={e=>s("originalBalance",e.target.value)} prefix="$"/></div>
+        <div><div style={{fontSize:11,color:C.muted,marginBottom:5}}>Min Payment</div><Inp type="number" value={f.minPayment} onChange={e=>s("minPayment",e.target.value)} prefix="$"/></div>
+        <div><div style={{fontSize:11,color:C.muted,marginBottom:5}}>APR %</div><Inp type="number" value={f.apr} onChange={e=>s("apr",e.target.value)} prefix="%"/></div>
+      </div>
+      <div style={{display:"flex",gap:8,paddingTop:4}}>
+        {data?.id&&<Btn label="🗑 Delete" color={C.danger} ghost onClick={()=>onDel(data.id)}/>}
+        <Btn full label="Save" color={C.accent} onClick={()=>onSave({...f,balance:+f.balance,originalBalance:+f.originalBalance||+f.balance,minPayment:+f.minPayment,apr:+f.apr})}/>
+      </div>
+    </div>
+  </Modal>;
+}
+
+function PayModal({open,data,onPay,onClose}){
+  const[amt,setAmt]=useState("");
+  useEffect(()=>setAmt(""),[open]);
+  return<Modal open={open} onClose={onClose} title={`Pay: ${data?.name||""}`}>
+    <div style={{fontSize:13,color:C.muted,marginBottom:16}}>Balance: <strong style={{color:C.text}}>{fmt(data?.balance||0)}</strong></div>
+    <div style={{marginBottom:12}}><div style={{fontSize:11,color:C.muted,marginBottom:5}}>Amount</div><Inp type="number" value={amt} onChange={e=>setAmt(e.target.value)} prefix="$" placeholder={String(data?.minPayment||"")}/></div>
+    <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap"}}>
+      {[data?.minPayment,data?.minPayment*2,data?.balance].filter(v=>v&&v>0).map(v=>(
+        <Btn key={v} small label={fmt(v)} color={C.accent} ghost onClick={()=>setAmt(String(v))}/>
+      ))}
+    </div>
+    <Btn full label={`Apply ${amt?fmt(+amt):"Payment"}`} color={C.accent} onClick={()=>{if(+amt>0)onPay(data.id,+amt);}}/>
+  </Modal>;
+}
+
+function AcctModal({open,data,onSave,onDel,onClose}){
+  const[f,setF]=useState({name:"",type:"checking",balance:"",...data});
+  useEffect(()=>setF({name:"",type:"checking",balance:"",...data}),[data,open]);
+  const s=(k,v)=>setF(p=>({...p,[k]:v}));
+  return<Modal open={open} onClose={onClose} title={data?.id?"Edit Account":"Add Account"}>
+    <div style={{display:"flex",flexDirection:"column",gap:12}}>
+      <div><div style={{fontSize:11,color:C.muted,marginBottom:5}}>Account Name</div><Inp value={f.name} onChange={e=>s("name",e.target.value)} placeholder="e.g. Chase Checking"/></div>
+      <div><div style={{fontSize:11,color:C.muted,marginBottom:5}}>Type</div>
+        <select value={f.type} onChange={e=>s("type",e.target.value)} style={{width:"100%",background:C.surface,border:`1px solid ${C.border}`,color:C.text,padding:"9px 12px",borderRadius:8,fontSize:13}}>
+          {["checking","savings","investment","other"].map(t=><option key={t} value={t}>{t}</option>)}
+        </select>
+      </div>
+      <div><div style={{fontSize:11,color:C.muted,marginBottom:5}}>Balance</div><Inp type="number" value={f.balance} onChange={e=>s("balance",e.target.value)} prefix="$"/></div>
+      <div style={{display:"flex",gap:8,paddingTop:4}}>
+        {data?.id&&<Btn label="🗑 Delete" color={C.danger} ghost onClick={()=>onDel(data.id)}/>}
+        <Btn full label="Save" color={C.accent} onClick={()=>onSave({...f,balance:+f.balance})}/>
+      </div>
+    </div>
+  </Modal>;
+}
+
+function ExpModal({open,data,onSave,onDel,onClose}){
+  const[f,setF]=useState({name:"",amount:"",category:"other",recurring:false,...data});
+  useEffect(()=>setF({name:"",amount:"",category:"other",recurring:false,...data}),[data,open]);
+  const s=(k,v)=>setF(p=>({...p,[k]:v}));
+  return<Modal open={open} onClose={onClose} title={data?.id?"Edit Expense":"Add Expense"}>
+    <div style={{display:"flex",flexDirection:"column",gap:12}}>
+      <div><div style={{fontSize:11,color:C.muted,marginBottom:5}}>Name</div><Inp value={f.name} onChange={e=>s("name",e.target.value)} placeholder="e.g. Wisdom Teeth"/></div>
+      <div><div style={{fontSize:11,color:C.muted,marginBottom:5}}>Amount</div><Inp type="number" value={f.amount} onChange={e=>s("amount",e.target.value)} prefix="$"/></div>
+      <div><div style={{fontSize:11,color:C.muted,marginBottom:5}}>Category</div>
+        <select value={f.category} onChange={e=>s("category",e.target.value)} style={{width:"100%",background:C.surface,border:`1px solid ${C.border}`,color:C.text,padding:"9px 12px",borderRadius:8,fontSize:13}}>
+          {["housing","medical","auto","food","utilities","personal","business","other"].map(c=><option key={c} value={c}>{c}</option>)}
+        </select>
+      </div>
+      <div style={{display:"flex",alignItems:"center",gap:10}}>
+        <div onClick={()=>s("recurring",!f.recurring)} style={{width:36,height:20,borderRadius:99,background:f.recurring?C.accent:C.border,cursor:"pointer",position:"relative",transition:"background 0.2s"}}>
+          <div style={{width:16,height:16,borderRadius:99,background:"#fff",position:"absolute",top:2,left:f.recurring?18:2,transition:"left 0.2s"}}/>
+        </div>
+        <span style={{fontSize:12,color:C.muted}}>Recurring monthly</span>
+      </div>
+      <div style={{display:"flex",gap:8,paddingTop:4}}>
+        {data?.id&&<Btn label="🗑 Delete" color={C.danger} ghost onClick={()=>onDel(data.id)}/>}
+        <Btn full label="Save" color={C.accent} onClick={()=>onSave({...f,amount:+f.amount})}/>
+      </div>
+    </div>
+  </Modal>;
+}
+
+function IncomeModal({open,onLog,onClose}){
+  const[f,setF]=useState({source:"W2 Paycheck",amount:""});
+  useEffect(()=>setF({source:"W2 Paycheck",amount:""}),[open]);
+  return<Modal open={open} onClose={onClose} title="Log Income">
+    <div style={{display:"flex",flexDirection:"column",gap:12}}>
+      <div><div style={{fontSize:11,color:C.muted,marginBottom:5}}>Source</div>
+        <select value={f.source} onChange={e=>setF(p=>({...p,source:e.target.value}))} style={{width:"100%",background:C.surface,border:`1px solid ${C.border}`,color:C.text,padding:"9px 12px",borderRadius:8,fontSize:13}}>
+          {["W2 Paycheck","Freelance","Side Income","Tax Refund","Other"].map(s=><option key={s} value={s}>{s}</option>)}
+        </select>
+      </div>
+      <div><div style={{fontSize:11,color:C.muted,marginBottom:5}}>Amount</div><Inp type="number" value={f.amount} onChange={e=>setF(p=>({...p,amount:e.target.value}))} prefix="$" placeholder="0"/></div>
+      <Btn full label="Log Income" color={C.accent} onClick={()=>{if(+f.amount>0)onLog({...f,amount:+f.amount});}}/>
+    </div>
+  </Modal>;
+}
+
+const root=ReactDOM.createRoot(document.getElementById("root"));
+root.render(<App/>);
+</script>
+</body>
+</html>

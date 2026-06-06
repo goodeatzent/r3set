@@ -297,26 +297,48 @@ function renderDashboard(){
     ${s.savedAmount>0?`<div style="margin-top:10px;background:var(--accent)15;border-radius:8px;padding:8px 12px;font-size:12px;color:var(--accent)">💡 Apply ${fmt(s.savedAmount)} to priority debt → reduces balance & interest immediately</div>`:''}
   `);
 
+  const pendingItems=oneTime.filter(e=>!e.completed);
+  const doneItems=oneTime.filter(e=>e.completed);
+
   html+=card(`
     ${sh('⚡ One-Time Payments',btn('+ Add','var(--accent)',"openModal('expense',{recurring:false})"))}
-    ${oneTime.length===0?'<div style="font-size:12px;color:var(--muted);text-align:center;padding:12px 0">No one-time expenses</div>':''}
-    ${oneTime.map(e=>`
-      <div class="row" style="cursor:pointer">
-        <div onclick="toggleExpense(${e.id})" style="width:22px;height:22px;border-radius:6px;border:2px solid ${e.completed?'var(--accent)':'var(--border)'};
-          background:${e.completed?'var(--accent)':'transparent'};display:grid;place-items:center;flex-shrink:0;transition:all .2s;cursor:pointer">
-          ${e.completed?'<span style="font-size:12px;color:#000">✓</span>':''}
-        </div>
-        <div style="flex:1;cursor:pointer" onclick="openModal('expense',${JSON.stringify(e).replace(/"/g,'&quot;')})">
-          <div style="font-size:13px;text-decoration:${e.completed?'line-through':'none'};color:${e.completed?'var(--muted)':'var(--text)'}">${e.name}</div>
+    ${pendingItems.length===0&&doneItems.length===0?'<div style="font-size:12px;color:var(--muted);text-align:center;padding:12px 0">No one-time expenses — tap + Add to create one</div>':''}
+    ${pendingItems.map(e=>`
+      <div style="display:flex;align-items:center;gap:12px;padding:12px 6px;border-bottom:1px solid var(--border)">
+        <button id="chk-${e.id}"
+          ontouchstart="event.stopPropagation()"
+          ontouchend="event.stopPropagation();event.preventDefault();toggleExpense(${e.id})"
+          onclick="event.stopPropagation();toggleExpense(${e.id})"
+          style="width:30px;height:30px;min-width:30px;border-radius:8px;
+            border:2.5px solid var(--border);background:var(--surface);
+            display:grid;place-items:center;cursor:pointer;
+            touch-action:manipulation;-webkit-tap-highlight-color:transparent;padding:0;flex-shrink:0">
+        </button>
+        <div style="flex:1;min-width:0;cursor:pointer" onclick="openModal('expense',${JSON.stringify(e).replace(/"/g,'&quot;')})">
+          <div style="font-size:13px;color:var(--text);font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${e.name}</div>
           ${pill(e.category,'var(--warn)')}
         </div>
-        <div class="mono" style="font-size:14px;font-weight:700;color:${e.completed?'var(--muted)':'var(--warn)'};text-decoration:${e.completed?'line-through':'none'}">${fmt(e.amount)}</div>
+        <div class="mono" style="font-size:14px;font-weight:700;color:var(--warn);flex-shrink:0">${fmt(e.amount)}</div>
       </div>`).join('')}
-    ${sep()}
-    <div style="display:flex;justify-content:space-between">
-      <span style="font-size:12px;color:var(--muted)">Remaining</span>
-      <span class="mono" style="font-weight:700;color:var(--warn)">${fmt(pendingTotal)}</span>
-    </div>
+    ${pendingItems.length>0?`
+      <div style="display:flex;justify-content:space-between;padding:10px 6px 4px">
+        <span style="font-size:12px;color:var(--muted)">Remaining</span>
+        <span class="mono" style="font-weight:700;color:var(--warn)">${fmt(pendingTotal)}</span>
+      </div>`:''}
+    ${doneItems.length>0?`
+      <div style="margin-top:${pendingItems.length>0?'8':'0'}px;padding-top:8px;border-top:${pendingItems.length>0?'1px solid var(--border)':'none'}">
+        <div style="font-size:10px;font-weight:700;color:var(--accent);letter-spacing:.6px;text-transform:uppercase;margin-bottom:8px;padding:0 6px">✅ Completed — moved to Wins</div>
+        ${doneItems.map(e=>`
+          <div style="display:flex;align-items:center;gap:12px;padding:10px 6px;border-bottom:1px solid var(--border);opacity:.8">
+            <div style="width:30px;height:30px;min-width:30px;border-radius:8px;border:2.5px solid var(--accent);
+              background:var(--accent);display:grid;place-items:center;font-size:15px;color:#000;font-weight:800;flex-shrink:0">✓</div>
+            <div style="flex:1;min-width:0">
+              <div style="font-size:13px;color:var(--muted);text-decoration:line-through;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${e.name}</div>
+              <span style="font-size:11px;color:var(--accent)">👍 Logged to Wins tab</span>
+            </div>
+            <div class="mono" style="font-size:13px;font-weight:700;color:var(--muted);text-decoration:line-through;flex-shrink:0">${fmt(e.amount)}</div>
+          </div>`).join('')}
+      </div>`:''}
   `);
 
   html+=card(`
@@ -341,14 +363,22 @@ function renderDashboard(){
 }
 
 function toggleExpense(id){
-  const e=ST.expenses.find(x=>x.id===id);
+  // Prevent double-fire on mobile (touch + click)
+  if(window._toggleLock) return;
+  window._toggleLock=true;
+  setTimeout(()=>{window._toggleLock=false;},600);
+
+  const e=ST.expenses.find(x=>x.id===+id);
   if(!e)return;
-  e.completed=!e.completed;save();
-  if(e.completed){
-    showToast('✅ "'+e.name+'" done!');
-    addWin(`Paid ${e.name} (${fmt(e.amount)})`,'expense',e.amount);
-  }
+  if(e.completed) return; // already done — don't untoggle
+  e.completed=true;
+  save();
+  showToast('👍 "'+e.name+'" done!','#00e5b0');
+  addWin('Paid '+e.name+' ('+fmt(e.amount)+')','expense',e.amount);
   renderDashboard();
+  // Flash the wins tab button
+  const wBtn=document.querySelector('.tab-btn[data-tab="wins"]');
+  if(wBtn){wBtn.style.transform='scale(1.25)';setTimeout(()=>{wBtn.style.transform='scale(1)';},300);}
 }
 
 // ── DEBTS ─────────────────────────────────────────────────────────────────

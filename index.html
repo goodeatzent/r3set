@@ -94,7 +94,7 @@ select{background:var(--surface);border:1px solid var(--border);color:var(--text
 
 <script>
 'use strict';
-const KEY='r3set_v3';
+const KEY='r3set_v4';
 function load(){try{const s=localStorage.getItem(KEY);return s?JSON.parse(s):null}catch{return null}}
 function persist(s){try{localStorage.setItem(KEY,JSON.stringify(s))}catch{}}
 
@@ -109,17 +109,17 @@ const DEFAULTS={
     {id:2,name:'Freelance',icon:'🚀',rate:40,hours:10,color:'#00e5b0'},
   ],
   debts:[
-    {id:1,name:'Closed CC',balance:5000,originalBalance:5000,minPayment:100,apr:24.99,color:'#ff4d6a'},
-    {id:2,name:'Open CC',balance:980,originalBalance:1000,minPayment:25,apr:22.99,color:'#ffb830'},
+    {id:1,name:'Closed CC',balance:5000,originalBalance:5000,minPayment:100,apr:24.99,color:'#ff4d6a',dueDate:1},
+    {id:2,name:'Open CC',balance:980,originalBalance:1000,minPayment:25,apr:22.99,color:'#ffb830',dueDate:1},
   ],
   accounts:[
     {id:1,name:'Checking',type:'checking',balance:0,color:'#38bdf8'},
     {id:2,name:'Savings',type:'savings',balance:900,color:'#00e5b0'},
   ],
   expenses:[
-    {id:1,name:'Rent',amount:1000,category:'housing',recurring:true,completed:false},
-    {id:2,name:'Wisdom Teeth',amount:718,category:'medical',recurring:false,completed:false},
-    {id:3,name:'Tires',amount:400,category:'auto',recurring:false,completed:false},
+    {id:1,name:'Rent',amount:1000,category:'housing',recurring:true,completed:false,paidMonths:[]},
+    {id:2,name:'Wisdom Teeth',amount:718,category:'medical',recurring:false,completed:false,paidMonths:[]},
+    {id:3,name:'Tires',amount:400,category:'auto',recurring:false,completed:false,paidMonths:[]},
   ],
   incomeLog:[],
   wins:[],  // {id, text, date, type: 'payment'|'expense'|'manual', amount?}
@@ -135,8 +135,30 @@ if(ST.w2Hours!==undefined&&!ST.incomeStreams){
   delete ST.w2Hours;delete ST.w2Rate;delete ST.freelanceHours;delete ST.freelanceRate;
 }
 if(!ST.wins) ST.wins=[];
+// Migrate: ensure debts have dueDate, expenses have paidMonths
+ST.debts.forEach(d=>{if(!d.dueDate)d.dueDate=1;});
+ST.expenses.forEach(e=>{if(!e.paidMonths)e.paidMonths=[];});
 function save(){persist(ST)}
-function uid(){return Date.now()+''+Math.random().toString(36).slice(2,6)}
+function uid(){return '_'+Date.now()+''+Math.random().toString(36).slice(2,6)}
+// Current month key e.g. "2025-06"
+function monthKey(){const n=new Date();return n.getFullYear()+'-'+String(n.getMonth()+1).padStart(2,'0')}
+function isBillPaidThisMonth(e){return!!(e.paidMonths&&e.paidMonths.includes(monthKey()))}
+function daysUntil(dayOfMonth){
+  const now=new Date();
+  let d=new Date(now.getFullYear(),now.getMonth(),dayOfMonth);
+  if(d<now) d=new Date(now.getFullYear(),now.getMonth()+1,dayOfMonth);
+  return Math.ceil((d-now)/(1000*60*60*24));
+}
+function dueDateLabel(dayOfMonth){
+  if(!dayOfMonth)return '';
+  const sfx=['th','st','nd','rd'];
+  const v=dayOfMonth%100;
+  const s=sfx[(v-20)%10]||sfx[v]||sfx[0];
+  const days=daysUntil(dayOfMonth);
+  const urgency=days<=3?'var(--danger)':days<=7?'var(--warn)':'var(--muted)';
+  const when=days===0?'Today!':days===1?'Tomorrow':days+'d away';
+  return{label:'Due '+dayOfMonth+s,when,urgency,days};
+}
 
 // ── HELPERS ──────────────────────────────────────────────────────────────
 const fmt=(n)=>new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:0}).format(n||0);
@@ -305,14 +327,15 @@ function renderDashboard(){
     ${pendingItems.length===0&&doneItems.length===0?'<div style="font-size:12px;color:var(--muted);text-align:center;padding:12px 0">No one-time expenses — tap + Add to create one</div>':''}
     ${pendingItems.map(e=>`
       <div style="display:flex;align-items:center;gap:12px;padding:12px 6px;border-bottom:1px solid var(--border)">
-        <button id="chk-${e.id}"
-          ontouchstart="event.stopPropagation()"
-          ontouchend="event.stopPropagation();event.preventDefault();toggleExpense(${e.id})"
-          onclick="event.stopPropagation();toggleExpense(${e.id})"
-          style="width:30px;height:30px;min-width:30px;border-radius:8px;
-            border:2.5px solid var(--border);background:var(--surface);
-            display:grid;place-items:center;cursor:pointer;
-            touch-action:manipulation;-webkit-tap-highlight-color:transparent;padding:0;flex-shrink:0">
+        <button
+          onclick="event.stopPropagation();toggleExpense('${e.id}')"
+          ontouchend="event.stopPropagation();event.preventDefault();toggleExpense('${e.id}')"
+          style="width:38px;height:38px;min-width:38px;border-radius:10px;
+            border:2.5px solid #38bdf855;background:#38bdf810;
+            display:grid;place-items:center;cursor:pointer;font-size:18px;
+            touch-action:manipulation;-webkit-tap-highlight-color:transparent;padding:0;flex-shrink:0"
+          title="Mark as paid">
+          ○
         </button>
         <div style="flex:1;min-width:0;cursor:pointer" onclick="openModal('expense',${JSON.stringify(e).replace(/"/g,'&quot;')})">
           <div style="font-size:13px;color:var(--text);font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${e.name}</div>
@@ -344,17 +367,39 @@ function renderDashboard(){
   html+=card(`
     ${sh('🔁 Monthly Bills',btn('+ Add','var(--blue)',"openModal('expense',{recurring:true})"))}
     ${recurring.length===0?'<div style="font-size:12px;color:var(--muted);text-align:center;padding:8px 0">No recurring bills</div>':''}
-    ${recurring.map(e=>`
-      <div class="row" style="cursor:pointer" onclick="openModal('expense',${JSON.stringify(e).replace(/"/g,'&quot;')})">
-        <div style="width:7px;height:7px;border-radius:99px;background:var(--blue);flex-shrink:0"></div>
-        <span style="flex:1;font-size:13px">${e.name}</span>
-        ${pill(e.category,'var(--blue)')}
-        <span class="mono" style="font-size:13px;font-weight:700;color:var(--blue)">${fmt(e.amount)}</span>
-      </div>`).join('')}
-    ${sep()}
-    <div style="display:flex;justify-content:space-between">
+    ${recurring.map(e=>{
+      const paid=isBillPaidThisMonth(e);
+      return`<div style="display:flex;align-items:center;gap:10px;padding:10px 6px;border-bottom:1px solid var(--border)">
+        <button
+          onclick="event.stopPropagation();toggleBillPaid('${e.id}')"
+          ontouchend="event.stopPropagation();event.preventDefault();toggleBillPaid('${e.id}')"
+          style="width:38px;height:38px;min-width:38px;border-radius:10px;
+            border:2.5px solid ${paid?'var(--accent)':'var(--border)'};
+            background:${paid?'var(--accent)':'var(--surface)'};
+            display:grid;place-items:center;cursor:pointer;font-size:${paid?'16':'16'}px;font-weight:800;color:${paid?'#000':'var(--muted)'};
+            touch-action:manipulation;-webkit-tap-highlight-color:transparent;padding:0;flex-shrink:0">
+          ${paid?'✓':'○'}
+        </button>
+        <div style="flex:1;cursor:pointer;min-width:0" onclick="openModal('expense',${JSON.stringify(e).replace(/"/g,'&quot;')})">
+          <div style="font-size:13px;font-weight:500;color:${paid?'var(--muted)':'var(--text)'};text-decoration:${paid?'line-through':'none'}">${e.name}</div>
+          <div style="display:flex;gap:5px;margin-top:2px;flex-wrap:wrap">
+            ${pill(e.category,'var(--blue)')}
+            ${paid?'<span style="font-size:10px;color:var(--accent);font-weight:600">✅ Paid this month</span>':''}
+          </div>
+        </div>
+        <span class="mono" style="font-size:13px;font-weight:700;color:${paid?'var(--muted)':'var(--blue)'};text-decoration:${paid?'line-through':'none'};flex-shrink:0">${fmt(e.amount)}</span>
+      </div>`;}).join('')}
+    <div style="display:flex;justify-content:space-between;padding:8px 6px 2px">
       <span style="font-size:12px;color:var(--muted)">Total/month</span>
       <span class="mono" style="font-weight:700;color:var(--blue)">${fmt(c.recurringExp)}</span>
+    </div>
+    <div style="display:flex;justify-content:space-between;padding:4px 6px 2px">
+      <span style="font-size:11px;color:var(--muted)">Paid this month</span>
+      <span class="mono" style="font-size:12px;font-weight:700;color:var(--accent)">${fmt(s.expenses.filter(e=>e.recurring&&isBillPaidThisMonth(e)).reduce((a,e)=>a+e.amount,0))}</span>
+    </div>
+    <div style="display:flex;justify-content:space-between;padding:4px 6px 6px">
+      <span style="font-size:11px;color:var(--muted)">Still due</span>
+      <span class="mono" style="font-size:12px;font-weight:700;color:var(--warn)">${fmt(s.expenses.filter(e=>e.recurring&&!isBillPaidThisMonth(e)).reduce((a,e)=>a+e.amount,0))}</span>
     </div>
   `);
 
@@ -362,23 +407,46 @@ function renderDashboard(){
   document.getElementById('tab-dashboard').innerHTML=html;
 }
 
-function toggleExpense(id){
-  // Prevent double-fire on mobile (touch + click)
-  if(window._toggleLock) return;
-  window._toggleLock=true;
-  setTimeout(()=>{window._toggleLock=false;},600);
-
-  const e=ST.expenses.find(x=>x.id===+id);
-  if(!e)return;
-  if(e.completed) return; // already done — don't untoggle
+function toggleExpense(eid){
+  const sid=String(eid);
+  const e=ST.expenses.find(x=>String(x.id)===sid);
+  if(!e||e.completed)return;
   e.completed=true;
+  e.completedAt=Date.now();
   save();
   showToast('👍 "'+e.name+'" done!','#00e5b0');
   addWin('Paid '+e.name+' ('+fmt(e.amount)+')','expense',e.amount);
   renderDashboard();
-  // Flash the wins tab button
+  // Auto-remove from dashboard after 60 seconds
+  setTimeout(function(){
+    const idx=ST.expenses.findIndex(x=>String(x.id)===sid);
+    if(idx!==-1&&ST.expenses[idx].completed){
+      ST.expenses.splice(idx,1);save();
+      if(_currentTab==='dashboard')renderDashboard();
+    }
+  },60000);
   const wBtn=document.querySelector('.tab-btn[data-tab="wins"]');
-  if(wBtn){wBtn.style.transform='scale(1.25)';setTimeout(()=>{wBtn.style.transform='scale(1)';},300);}
+  if(wBtn){wBtn.style.transform='scale(1.3)';setTimeout(()=>{wBtn.style.transform='scale(1)';},350);}
+}
+function toggleBillPaid(eid){
+  const sid=String(eid);
+  const e=ST.expenses.find(x=>String(x.id)===sid);
+  if(!e)return;
+  if(!e.paidMonths)e.paidMonths=[];
+  const mk=monthKey();
+  const already=e.paidMonths.includes(mk);
+  if(already){
+    e.paidMonths=e.paidMonths.filter(m=>m!==mk);
+    save();renderDashboard();
+  } else {
+    e.paidMonths.push(mk);
+    save();
+    showToast('✅ '+e.name+' paid for '+mk.replace('-','/'),'#00e5b0');
+    addWin(e.name+' paid for '+mk.replace('-','/'),'expense',e.amount);
+    renderDashboard();
+    const wBtn=document.querySelector('.tab-btn[data-tab="wins"]');
+    if(wBtn){wBtn.style.transform='scale(1.3)';setTimeout(()=>{wBtn.style.transform='scale(1)';},350);}
+  }
 }
 
 // ── DEBTS ─────────────────────────────────────────────────────────────────
@@ -413,14 +481,15 @@ function renderDebts(){
     html+=`<div class="card" style="border-color:${i===0?d.color+'66':'var(--border)'};position:relative;overflow:hidden">
       ${i===0?`<div style="position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,${d.color},transparent)"></div>`:''}
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">
-        <div>
+        <div style="flex:1;min-width:0">
           <div style="font-size:14px;font-weight:700">${d.name}</div>
-          <div style="margin-top:4px;display:flex;gap:5px;flex-wrap:wrap">
+          <div style="margin-top:4px;display:flex;gap:5px;flex-wrap:wrap;align-items:center">
             ${pill(i===0?'ATTACK NOW':'MIN ONLY',i===0?'var(--accent)':'var(--muted)')}
             ${pill(d.apr+'% APR',d.color)}
+            ${(()=>{const dd=dueDateLabel(d.dueDate);return dd?`<span style="font-size:10px;font-weight:700;color:${dd.urgency};background:${dd.urgency}20;padding:2px 7px;border-radius:99px">📅 ${dd.label} · ${dd.when}</span>`:'';})()}
           </div>
         </div>
-        <div class="mono" style="font-size:20px;font-weight:800;color:${d.color}">${fmt(d.balance)}</div>
+        <div class="mono" style="font-size:20px;font-weight:800;color:${d.color};flex-shrink:0">${fmt(d.balance)}</div>
       </div>
       ${barHtml(d.balance,d.originalBalance||d.balance,d.color,5)}
       <div style="display:flex;justify-content:space-between;margin-top:4px;margin-bottom:12px">
@@ -625,36 +694,52 @@ function renderWins(){
   `,'background:linear-gradient(135deg,#0b2218,#091520);border-color:var(--accent)44');
 
   html+=card(`
-    ${sh('Add a Win',btn('+ Manual Win','var(--accent)',"openModal('manual_win',{})"))}
+    ${sh('🏆 Win Log',btn('+ Add Win','var(--accent)',"openModal('manual_win',{})"))}
     ${s.wins.length===0?`<div style="text-align:center;padding:24px 0">
       <div style="font-size:40px;margin-bottom:10px">🎯</div>
-      <div style="font-size:13px;color:var(--muted)">No wins logged yet. Make a debt payment or check off an expense to get started!</div>
+      <div style="font-size:13px;color:var(--muted)">No wins yet — make a debt payment or check off a one-time expense to get started!</div>
     </div>`:''}
     ${s.wins.map((w,i)=>{
       const typeColors={payment:'var(--accent)',expense:'var(--warn)',manual:'var(--purple)',income:'var(--blue)'};
       const typeIcons={payment:'💸',expense:'✅',manual:'⭐',income:'💵'};
       const col=typeColors[w.type]||'var(--accent)';
       const ico=typeIcons[w.type]||'👍';
-      return`<div class="win-item" style="${i===0?'border-top:1px solid var(--border);':''}" >
-        <div class="win-badge">${ico}</div>
-        <div style="flex:1">
-          <div style="font-size:13px;font-weight:600;color:var(--text)">${w.text}</div>
-          <div style="font-size:10px;color:var(--muted);margin-top:2px">${w.date}</div>
+      const wid=String(w.id);
+      return`<div style="display:flex;align-items:center;gap:10px;padding:12px 6px;border-bottom:1px solid var(--border)">
+        <div style="font-size:20px;flex-shrink:0;width:28px;text-align:center">${ico}</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:13px;font-weight:600;color:var(--text);line-height:1.4">${w.text}</div>
+          <div style="display:flex;align-items:center;gap:6px;margin-top:3px;flex-wrap:wrap">
+            <span style="font-size:10px;color:var(--muted)">${w.date}</span>
+            ${w.amount>0?`<span class="mono" style="font-size:12px;font-weight:700;color:${col}">${fmt(w.amount)}</span>`:''}
+            <span style="font-size:13px">👍</span>
+          </div>
         </div>
-        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
-          ${w.amount>0?`<span class="mono" style="font-size:13px;font-weight:700;color:${col}">${fmt(w.amount)}</span>`:''}
-          <span style="font-size:18px">👍</span>
-        </div>
+        <button
+          onclick="event.stopPropagation();delWin('${wid}')"
+          ontouchend="event.stopPropagation();event.preventDefault();delWin('${wid}')"
+          style="background:transparent;border:1px solid var(--danger)44;color:var(--danger);
+            border-radius:8px;padding:6px 10px;font-size:12px;cursor:pointer;flex-shrink:0;
+            touch-action:manipulation;-webkit-tap-highlight-color:transparent;font-weight:700">
+          ✕
+        </button>
       </div>`;
     }).join('')}
-    ${s.wins.length>0?`<div style="padding-top:12px;text-align:center">${btnGhost('Clear All Wins','var(--danger)',"clearWins()")}</div>`:''}
+    ${s.wins.length>0?`<div style="display:flex;gap:10px;padding-top:14px">
+      <div style="flex:1;font-size:11px;color:var(--muted);padding-top:6px">${s.wins.length} win${s.wins.length!==1?'s':''} logged</div>
+      ${btnGhost('Clear All','var(--danger)',"clearWins()",'btn-sm')}
+    </div>`:''}
   `);
 
   document.getElementById('tab-wins').innerHTML=html;
 }
 
+function delWin(id){
+  ST.wins=ST.wins.filter(w=>String(w.id)!==String(id));
+  save();renderWins();
+}
 function clearWins(){
-  if(!confirm('Clear all wins?'))return;
+  if(!confirm('Clear all wins? This cannot be undone.'))return;
   ST.wins=[];save();renderWins();
 }
 
@@ -820,6 +905,12 @@ function openModal(type,data){
         ${fld('m-min','Min Payment','number',data.minPayment||'')}
         ${fld('m-apr','APR %','number',data.apr||'')}
       </div>
+      <div><div style="font-size:11px;color:var(--muted);margin-bottom:5px">📅 Due Date (day of month)</div>
+        <select id="m-duedate">
+          <option value="">-- No due date --</option>
+          ${[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28].map(n=>{const sfx=['th','st','nd','rd'];const v=n%100;const s=sfx[(v-20)%10]||sfx[v]||sfx[0];return'<option value="'+n+'" '+(data.dueDate===n?'selected':'')+'>'+n+s+'</option>';}).join('')}
+        </select>
+      </div>
       ${saveBtns(data.id,'delDebt')}
     </div>`;
   } else if(type==='payment'){
@@ -927,9 +1018,11 @@ function saveDebt(id){
   const orig=+document.getElementById('m-orig').value||balance;
   const min=+document.getElementById('m-min').value;
   const apr=+document.getElementById('m-apr').value;
+  const dd=document.getElementById('m-duedate');
+  const dueDate=dd&&dd.value?+dd.value:null;
   if(!name||!balance)return;
-  if(id){const d=ST.debts.find(x=>x.id===id);if(d)Object.assign(d,{name,balance,originalBalance:orig,minPayment:min,apr});}
-  else ST.debts.push({id:uid(),name,balance,originalBalance:orig,minPayment:min,apr,color:COLORS[ST.debts.length%6]});
+  if(id){const d=ST.debts.find(x=>x.id===id);if(d)Object.assign(d,{name,balance,originalBalance:orig,minPayment:min,apr,dueDate});}
+  else ST.debts.push({id:uid(),name,balance,originalBalance:orig,minPayment:min,apr,dueDate,color:COLORS[ST.debts.length%6]});
   save();closeModal();showToast('Debt saved');renderDebts();renderPlan();updateHeader();
 }
 function delDebt(id){
@@ -966,7 +1059,7 @@ function saveExpense(id){
   const recurring=!!window._recurringState;
   if(!name||!amount)return;
   if(id){const e=ST.expenses.find(x=>x.id===id);if(e)Object.assign(e,{name,amount,category,recurring});}
-  else ST.expenses.push({id:uid(),name,amount,category,recurring,completed:false});
+  else ST.expenses.push({id:uid(),name,amount,category,recurring,completed:false,paidMonths:[]});
   save();closeModal();showToast('Expense saved');renderDashboard();renderPlan();updateHeader();
 }
 function delExpense(id){
@@ -1062,6 +1155,14 @@ function renderTab(id){
   updateHeader();
 }
 function renderAll(){renderDashboard();renderDebts();renderAccounts();renderIncome();renderPlan();renderWins();updateHeader();}
+
+// Global delegated handlers for bill & expense checkboxes
+document.addEventListener('touchend',function(ev){
+  const b=ev.target.closest('[data-toggle-expense]');
+  if(b){ev.preventDefault();ev.stopPropagation();toggleExpense(b.dataset.toggleExpense);}
+  const c=ev.target.closest('[data-toggle-bill]');
+  if(c){ev.preventDefault();ev.stopPropagation();toggleBillPaid(c.dataset.toggleBill);}
+},{passive:false});
 
 initTabBar();
 switchTab('dashboard');
